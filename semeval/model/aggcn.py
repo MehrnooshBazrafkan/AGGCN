@@ -332,7 +332,7 @@ def clones(module, N):
 
 
 class MultiHeadAttention(nn.Module):
-
+    
     def __init__(self, h, d_model, dropout=0.1):
         super(MultiHeadAttention, self).__init__()
         assert d_model % h == 0
@@ -341,6 +341,42 @@ class MultiHeadAttention(nn.Module):
         self.h = h
         self.linears = clones(nn.Linear(d_model, d_model), 2)
         self.dropout = nn.Dropout(p=dropout)
+        
+        # Encoder
+        H = opt
+        for layer in xrange(self.n_layers):
+            H = self.__encoder(emb_matrix, H, layer)
+
+        # Final node representations
+        self.H = H
+
+        # Decoder
+        for layer in range(self.n_layers - 1, -1, -1):
+            H = self.__decoder(H, layer)
+        opt_ = H
+
+        # The reconstruction loss of node features
+        features_loss = tf.sqrt(tf.reduce_sum(tf.reduce_sum(tf.pow(opt - opt_, 2))))
+
+        # The reconstruction loss of the graph structure
+        self.S_emb = tf.nn.embedding_lookup(self.H, S)
+        self.R_emb = tf.nn.embedding_lookup(self.H, R)
+        structure_loss = -tf.log(tf.sigmoid(tf.reduce_sum(self.S_emb * self.R_emb, axis=-1)))
+        structure_loss = tf.reduce_sum(structure_loss)
+
+        # Total loss
+        self.loss = features_loss + self.lambda_ * structure_loss
+
+        return self.loss, self.H, self.C
+
+    def __encoder(self, emb_matrix, H, layer):
+        H = tf.matmul(H, self.W[layer])
+        self.C[layer] = self.graph_attention_layer(emb_matrix, H, self.v[layer], layer)
+        return tf.sparse_tensor_dense_matmul(self.C[layer], H)
+
+    def __decoder(self, H, layer):
+        H = tf.matmul(H, self.W[layer], transpose_b=True)
+        return tf.sparse_tensor_dense_matmul(self.C[layer], H)
 
     def forward(self, query, key, mask=None):
         if mask is not None:
